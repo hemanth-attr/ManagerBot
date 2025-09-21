@@ -1,27 +1,31 @@
-import os  # <-- This is required to use os.getenv
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ChatJoinRequestHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder, ChatJoinRequestHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes
+)
 from telegram.constants import ChatMemberStatus
 
-TOKEN = os.getenv("TOKEN")  # Now this works
-# Track warnings
-warnings = {}
+# ----------------- Config -----------------
+TOKEN = os.getenv("TOKEN")  # Set this in Render environment variables
+warnings = {}  # Track warnings per user
 
 # ----------------- Join Request Handler -----------------
 async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.chat_join_request.from_user
     chat_id = update.chat_join_request.chat.id
 
-    # 1️⃣ Check for username
+    # Check if user has a username
     if not user.username:
         warnings[user.id] = 1
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"[{user.id}] In order to be accepted in the group, please set up a username.\nAction: Warn (1/3) ❕"
+            text=f"[{user.id}] In order to be accepted in the group, please set up a username.\nAction: Warn (1/3) ❕",
+            parse_mode="HTML"
         )
         return
 
-    # 2️⃣ Send rules in DM
+    # Send rules in DM
     rules_text = f"""👋 {user.mention_html()}, please read the group rules:
 
 1. Don't spam or promote!
@@ -29,7 +33,9 @@ async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 3. Must have a username.
 4. Always use DVA for safe deals.
 
-Do you accept the rules?"""
+Do you accept the rules?
+
+Start interacting here: https://t.me/{context.bot.username}?start={user.id}"""
 
     keyboard = [
         [
@@ -48,7 +54,6 @@ Do you accept the rules?"""
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data = query.data.split("_")
     action = data[0]
     user_id = int(data[1])
@@ -70,13 +75,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----------------- Spam Detection -----------------
 async def spam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
+    chat = update.effective_chat
 
     # Ignore admins
-    chat_admins = await update.effective_chat.get_administrators()
+    chat_admins = await chat.get_administrators()
     if user.id in [admin.user.id for admin in chat_admins]:
         return
 
-    # Check if message contains a link
+    # Detect links
     if "http" in update.message.text.lower():
         warnings[user.id] = warnings.get(user.id, 0) + 1
         warn_count = warnings[user.id]
@@ -86,15 +92,15 @@ async def spam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"{user.first_name} 🔇 Muted for spamming.")
             await update.message.delete()
             await context.bot.restrict_chat_member(
-                update.effective_chat.id, 
-                user.id, 
+                chat.id,
+                user.id,
                 permissions=None
             )
 
 # ----------------- Main -----------------
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(ChatJoinRequestHandler(join_request))
-app.add_handler(CallbackQueryHandler(button_handler))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, spam_handler))
-
-app.run_polling()
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(ChatJoinRequestHandler(join_request))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, spam_handler))
+    app.run_polling()
