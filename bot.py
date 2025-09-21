@@ -17,7 +17,7 @@ TOKEN = os.getenv("TOKEN")
 WARNINGS_FILE = "warnings.json"
 WARN_THRESHOLD = 3
 MUTE_DURATION_HOURS = 24
-BAN_AFTER_WARN = True
+BAN_AFTER_WARN = False  # Changed this to False to stop automatic bans
 
 # Load warnings from file
 if os.path.exists(WARNINGS_FILE):
@@ -117,7 +117,8 @@ Start interacting here: https://t.me/{context.bot.username}?start={user.id}"""
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
-    except Exception:
+    except Exception as e:
+        print(f"Failed to send welcome message to user {user.id}: {e}")
         await context.bot.decline_chat_join_request(chat_id, user.id)
 
 # ----------------- Button Handler -----------------
@@ -149,7 +150,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.decline_chat_join_request(chat_id, user_id)
                 await query.edit_message_text("❌ You did not accept the rules. Request declined.")
         except Exception as e:
-            print(e)
+            print(f"Error handling join request button: {e}")
     
     elif data.startswith(("cancel_warn_", "ban_user_")):
         action, user_id, chat_id = data.split('_')
@@ -233,6 +234,26 @@ async def unwarn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"User [{user_id}] has no active warnings.")
 
+async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unbans a user via command."""
+    user = update.effective_user
+    chat = update.effective_chat
+    chat_admins = await context.bot.get_chat_administrators(chat.id)
+    if user.id not in [admin.user.id for admin in chat_admins]:
+        await update.message.reply_text("You are not an administrator.")
+        return
+        
+    if not context.args or len(context.args) > 1:
+        await update.message.reply_text("Usage: `/unban <user_id>`", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    try:
+        user_id = int(context.args[0])
+        await context.bot.unban_chat_member(chat.id, user_id)
+        await update.message.reply_text(f"✅ User [{user_id}] has been unbanned.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to unban user [{user_id}]. Reason: {e}")
+
 # ----------------- Message Handler -----------------
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -309,16 +330,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Notify admins
         warn_until_str = warnings[chat_id][str(user.id)]["expires_at"].strftime("%d/%m/%Y %H:%M")
         for admin in chat_admins:
-            await context.bot.send_message(
-                chat_id=admin.user.id,
-                text=f"@{user.username or user.first_name} [{user.id}] sent '{offense}'. ⚠ Warn ({warn_count}/{WARN_THRESHOLD}) until {warn_until_str}.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔗 Go to Message", url=f"https://t.me/c/{str(chat.id)[4:]}/{update.message.message_id}")],
-                    [InlineKeyboardButton("❌ Cancel Warning", callback_data=f"cancel_warn_{user.id}_{chat.id}"),
-                     InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}_{chat.id}")]
-                ]),
-                parse_mode=ParseMode.MARKDOWN
-            )
+            try:
+                await context.bot.send_message(
+                    chat_id=admin.user.id,
+                    text=f"@{user.username or user.first_name} [{user.id}] sent '{offense}'. ⚠ Warn ({warn_count}/{WARN_THRESHOLD}) until {warn_until_str}.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔗 Go to Message", url=f"https://t.me/c/{str(chat.id)[4:]}/{update.message.message_id}")],
+                        [InlineKeyboardButton("❌ Cancel Warning", callback_data=f"cancel_warn_{user.id}_{chat.id}"),
+                         InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}_{chat.id}")]
+                    ]),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                print(f"Failed to notify admin {admin.user.id}: {e}")
 
 # ----------------- Main -----------------
 if __name__ == "__main__":
@@ -335,5 +359,6 @@ if __name__ == "__main__":
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, message_handler))
     application.add_handler(CommandHandler("warn", warn_command))
     application.add_handler(CommandHandler("unwarn", unwarn_command))
+    application.add_handler(CommandHandler("unban", unban_command))
     
     application.run_polling()
