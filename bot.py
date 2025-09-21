@@ -2,7 +2,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ChatJoinRequestHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatMemberStatus
 
-TOKEN = "YOUR_BOT_TOKEN"
+TOKEN = os.getenv("TOKEN")
 
 # Track warnings
 warnings = {}
