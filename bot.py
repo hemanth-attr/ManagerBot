@@ -1,31 +1,42 @@
 import os
+import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, ChatJoinRequestHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes
 )
 from telegram.constants import ChatMemberStatus
+from flask import Flask
 
 # ----------------- Config -----------------
 TOKEN = os.getenv("TOKEN")  # Set this in Render environment variables
 warnings = {}  # Track warnings per user
+
+# ----------------- Flask Keepalive -----------------
+app_flask = Flask(__name__)
+
+@app_flask.route("/")
+def home():
+    return "✅ ManagerBot is running on Render!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    app_flask.run(host="0.0.0.0", port=port)
 
 # ----------------- Join Request Handler -----------------
 async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.chat_join_request.from_user
     chat_id = update.chat_join_request.chat.id
 
-    # Check if user has a username
     if not user.username:
         warnings[user.id] = 1
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"[{user.id}] In order to be accepted in the group, please set up a username.\nAction: Warn (1/3) ❕",
+            text=f"[{user.id}] Please set a username to be accepted.\nAction: Warn (1/3) ❕",
             parse_mode="HTML"
         )
         return
 
-    # Send rules in DM
     rules_text = f"""👋 {user.mention_html()}, please read the group rules:
 
 1. Don't spam or promote!
@@ -54,10 +65,8 @@ Start interacting here: https://t.me/{context.bot.username}?start={user.id}"""
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data.split("_")
-    action = data[0]
-    user_id = int(data[1])
-    chat_id = int(data[2])
+    action, user_id, chat_id = query.data.split("_")
+    user_id, chat_id = int(user_id), int(chat_id)
 
     if action == "accept":
         try:
@@ -76,13 +85,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def spam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     chat = update.effective_chat
-
-    # Ignore admins
     chat_admins = await chat.get_administrators()
+
     if user.id in [admin.user.id for admin in chat_admins]:
         return
 
-    # Detect links
     if "http" in update.message.text.lower():
         warnings[user.id] = warnings.get(user.id, 0) + 1
         warn_count = warnings[user.id]
@@ -99,8 +106,12 @@ async def spam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----------------- Main -----------------
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(ChatJoinRequestHandler(join_request))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, spam_handler))
-    app.run_polling()
+    # Start Flask server in another thread
+    threading.Thread(target=run_flask).start()
+
+    # Start Telegram bot
+    application = ApplicationBuilder().token(TOKEN).build()
+    application.add_handler(ChatJoinRequestHandler(join_request))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, spam_handler))
+    application.run_polling()
