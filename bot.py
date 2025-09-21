@@ -1,9 +1,9 @@
+import os  # <-- This is required to use os.getenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ChatJoinRequestHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatMemberStatus
 
-TOKEN = os.getenv("TOKEN")
-
+TOKEN = os.getenv("TOKEN")  # Now this works
 # Track warnings
 warnings = {}
 
