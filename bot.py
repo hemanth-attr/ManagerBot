@@ -17,7 +17,7 @@ TOKEN = os.getenv("TOKEN")
 WARNINGS_FILE = "warnings.json"
 WARN_THRESHOLD = 3
 MUTE_DURATION_HOURS = 24
-BAN_AFTER_WARN = False  # Changed this to False to stop automatic bans
+BAN_AFTER_WARN = False
 
 # Load warnings from file
 if os.path.exists(WARNINGS_FILE):
@@ -89,7 +89,7 @@ def get_offense_type(message):
 async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handles new chat join requests by sending a DM to the user with group rules.
-    If the DM fails, the request is auto-declined.
+    If the DM fails, the request is auto-approved.
     """
     user = update.chat_join_request.from_user
     chat_id = update.chat_join_request.chat.id
@@ -118,8 +118,9 @@ Start interacting here: https://t.me/{context.bot.username}?start={user.id}"""
             parse_mode=ParseMode.HTML
         )
     except Exception as e:
-        print(f"Failed to send welcome message to user {user.id}: {e}")
-        await context.bot.decline_chat_join_request(chat_id, user.id)
+        print(f"Failed to send welcome message to user {user.id}: {e}. Auto-approving request.")
+        await context.bot.approve_chat_join_request(chat_id, user.id)
+
 
 # ----------------- Button Handler -----------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,17 +135,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if action == "accept":
                 await context.bot.approve_chat_join_request(chat_id, user_id)
-                keyboard = [
+                # Prepare welcome message for the group
+                welcome_keyboard = [
                     [
                         InlineKeyboardButton("Contact Admin", url="https://t.me/admin_username"),
                         InlineKeyboardButton("Go to Chat", url=f"https://t.me/c/{str(chat_id)[4:]}")
                     ]
                 ]
+                # Send welcome message to the group
                 await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"Hi {query.from_user.first_name}! Welcome to the group! ✅ Prefer DVA for safe deals.",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
+                    chat_id=chat_id,
+                    text=f"Welcome to the group, {query.from_user.first_name}! ✅ Please use DVA for safe deals.",
+                    reply_markup=InlineKeyboardMarkup(welcome_keyboard)
                 )
+                # Edit the original DM to a confirmation message
                 await query.edit_message_text("✅ You accepted the rules. Welcome to the group!")
             else:
                 await context.bot.decline_chat_join_request(chat_id, user_id)
@@ -175,7 +179,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----------------- Admin Commands -----------------
 async def warn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Warns a user manually via command."""
+    """Manually warns a user via command."""
     user = update.effective_user
     chat = update.effective_chat
     chat_id = str(chat.id)
@@ -208,7 +212,7 @@ async def warn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"User [{warned_user_id}] has been warned. ⚠ ({warn_count}/{WARN_THRESHOLD}) Reason: {reason}")
     
 async def unwarn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Removes a warning from a user via command."""
+    """Removes a user's warning via command."""
     user = update.effective_user
     chat = update.effective_chat
     chat_id = str(chat.id)
@@ -289,23 +293,31 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        # Notify user via DM
-        left = WARN_THRESHOLD - warn_count
-        action_text = ""
-        if left <= 0 and BAN_AFTER_WARN:
-            action_text = "You have reached the maximum warnings. You will be banned."
-        elif left <= 0:
-            action_text = f"You have reached the maximum warnings. You will be muted for {MUTE_DURATION_HOURS} hours."
-        else:
-            action_text = f"{left} warning(s) left before action."
-
-        try:
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=f"⚠ Warning ({warn_count}/{WARN_THRESHOLD}) for {offense}. {action_text}"
-            )
-        except Exception:
-            pass
+        # Conditional notification: in group for first two warns, in personal for last one
+        if warn_count < WARN_THRESHOLD:
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⚠ Warning ({warn_count}/{WARN_THRESHOLD}) for {user.mention_html()} for a {offense}. {WARN_THRESHOLD - warn_count} warning(s) left before action.",
+                    parse_mode=ParseMode.HTML,
+                    reply_to_message_id=update.message.message_id
+                )
+            except Exception as e:
+                print(f"Failed to send group warning to chat {chat_id}: {e}")
+        else: # warn_count >= WARN_THRESHOLD
+            action_text = ""
+            if BAN_AFTER_WARN:
+                action_text = "You have reached the maximum warnings. You will be banned."
+            else:
+                action_text = f"You have reached the maximum warnings. You will be muted for {MUTE_DURATION_HOURS} hours."
+            
+            try:
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=f"⚠ Warning ({warn_count}/{WARN_THRESHOLD}) for {offense}. {action_text}"
+                )
+            except Exception:
+                pass
 
         # Take automated action
         if warn_count >= WARN_THRESHOLD:
@@ -327,22 +339,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"Failed to mute user {user.id}: {e}")
 
-        # Notify admins
-        warn_until_str = warnings[chat_id][str(user.id)]["expires_at"].strftime("%d/%m/%Y %H:%M")
-        for admin in chat_admins:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin.user.id,
-                    text=f"@{user.username or user.first_name} [{user.id}] sent '{offense}'. ⚠ Warn ({warn_count}/{WARN_THRESHOLD}) until {warn_until_str}.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔗 Go to Message", url=f"https://t.me/c/{str(chat.id)[4:]}/{update.message.message_id}")],
-                        [InlineKeyboardButton("❌ Cancel Warning", callback_data=f"cancel_warn_{user.id}_{chat.id}"),
-                         InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}_{chat.id}")]
-                    ]),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            except Exception as e:
-                print(f"Failed to notify admin {admin.user.id}: {e}")
+        # Notify admins ONLY on the final warning
+        if warn_count >= WARN_THRESHOLD:
+            warn_until_str = warnings[chat_id][str(user.id)]["expires_at"].strftime("%d/%m/%Y %H:%M")
+            for admin in chat_admins:
+                try:
+                    await context.bot.send_message(
+                        chat_id=admin.user.id,
+                        text=f"@{user.username or user.first_name} [{user.id}] sent '{offense}'. ⚠ Final Warn ({warn_count}/{WARN_THRESHOLD}) until {warn_until_str}. Action was taken.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔗 Go to Message", url=f"https://t.me/c/{str(chat.id)[4:]}/{update.message.message_id}")],
+                            [InlineKeyboardButton("❌ Cancel Warning", callback_data=f"cancel_warn_{user.id}_{chat.id}"),
+                             InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}_{chat.id}")]
+                        ]),
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception as e:
+                    print(f"Failed to notify admin {admin.user.id}: {e}")
 
 # ----------------- Main -----------------
 if __name__ == "__main__":
